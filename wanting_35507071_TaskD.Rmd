@@ -18,7 +18,6 @@ knitr::opts_chunk$set(echo = TRUE, eval = TRUE, warning = FALSE, message = FALSE
 - Think about the ways of comparing difference between multiple groups. - t test, Anova test.
 
 
-
 ```{r}
 library(tidyverse)
 # Load data and extract two target columns. set them as factors
@@ -43,18 +42,177 @@ sex_results <- data.frame()
 for (v in liwc_vars) {
   # two-sample t-test
   tt <- t.test(sex_df[[v]] ~ sex_df$demographic_sex)  
-  # `sex_df[[v]]` extracts the numerical data for the current language variable `v`. 
-  # `~ sex_df$demographic_sex` splits that data into two groups based on sex
+  # sex_df[[v]] extracts the numerical data for the current language variable v. 
+  # ~ sex_df$demographic_sex splits that data into two groups based on sex
   sex_results <- rbind(sex_results, data.frame(
     variable = v,
-    mean_F = tt$estimate[1], mean_M = tt$estimate[2],
-    diff = tt$estimate[1] - tt$estimate[2], p_value = tt$p.value))
+    mean_F = tt$estimate[1], 
+    mean_M = tt$estimate[2],
+    diff = tt$estimate[1] - tt$estimate[2], 
+    p_value = tt$p.value))
 }
 sex_results$p_adj <- p.adjust(sex_results$p_value, method = "BH")  # correct for 93 tests
-sex_results <- sex_results[order(sex_results$p_adj), ]  # most significant first
+sex_results <- sex_results[order(sex_results$p_adj), ]  # top10 significant
 head(sex_results, 10)
 
 
+# ====== Faculty ======
+fac_df <- ind[!is.na(ind$unit_faculty), ]
+fac_df$unit_faculty <- droplevels(fac_df$unit_faculty)
+
+fac_results <- data.frame()
+for (v in liwc_vars) {
+  fit <- aov(fac_df[[v]] ~ fac_df$unit_faculty)  # one-way ANOVA
+  p   <- summary(fit)[[1]][["P-value(>F)"]][1]  # pull the p-value out
+  fac_results <- rbind(fac_results, data.frame(variable = v, p_value = p))
+}
+fac_results$p_adj <- p.adjust(fac_results$p_value, method = "BH")
+fac_results <- fac_results[order(fac_results$p_adj), ]
+head(fac_results, 10)
+
+# Group-means table for the standout faculty variable
+tapply(fac_df$money, fac_df$unit_faculty, mean)
+
+# ====== PLOTS ======
+library(ggplot2)
+ggplot(sex_df, aes(demographic_sex, social, fill = demographic_sex)) +
+  geom_boxplot() + labs(title = "Social words by sex", x = "Sex", y = "social") +
+  theme_minimal()
+
+ggplot(fac_df, aes(unit_faculty, money)) +
+  geom_boxplot(fill = "steelblue") +
+  labs(title = "Money words by faculty", x = NULL, y = "money") +
+  theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 ```
+**Sex:**
+15 of 93 variables differ significantly (adjusted p < 0.05). The biggest gaps: women's posts score higher on social (8.99 vs 7.84), family (0.19 vs 0.06), Exclam (1.39 vs 0.43), Clout, and are longer overall (WC 122 vs 106 words); men score higher on number (3.47 vs 2.53). These line up with well-documented LIWC gender patterns — more affiliative/social language from women, more numeric language from men.
+
+**Faculty:** 
+78 of 93 variables differ — faculty effects are far stronger than sex effects. The standouts are topic words: money is dominated by Business & Economics (mean 4.38 vs ~0.1–0.9 everywhere else), and health/bio/work follow the same disciplinary logic.
+
+Differences between faculties are much larger and more pervasive than differences between sexes, and the strongest faculty differences are content/topic words that reflect what each discipline talks about.
+
+<br>
+---
+
+# Qustion2
+
+The ind and dep files are joined on Unique_ID to form the modelling table, and a single cleaning function is applied to both train and validation so they are treated identically. I evaluate three classifiers covered in the unit — a decision tree, logistic regression and naive Bayes — each trained on all independent variables. Performance is measured with accuracy, precision, recall and F1, treating Content-relevant as the positive class so that F1 is consistent with the metric used for Q4 and Q5.
+
+```{r}
+library(rpart)
+library(e1071)
+
+read_join <- function(ind_file, dep_file) {
+  x <- read.csv(ind_file, stringsAsFactors = FALSE)
+  y <- read.csv(dep_file, stringsAsFactors = FALSE)
+  merge(x, y, by = "Unique_ID")
+}
+
+# write a function to clean datasets used here
+clean <- function(df) {
+  df <- df[!duplicated(df$Unique_ID), ]  # drop duplicate IDs
+  num <- setdiff(names(df), c("Unique_ID","unit_faculty","demographic_sex","label"))
+  df <- df[rowSums(is.na(df[num])) < length(num), ]  # drop all-NA junk rows
+  df <- df[!is.na(df$label), ]  # drop rows with no label
+  df$unit_faculty <- ifelse(is.na(df$unit_faculty), "Unknown", df$unit_faculty)
+  df$demographic_sex <- ifelse(df$demographic_sex %in% c("F","M"), # As Q1
+                               df$demographic_sex, "Unknown") # label 'X' and 'NA' to 'Unknown'
+  df$unit_faculty    <- factor(df$unit_faculty)
+  df$demographic_sex <- factor(df$demographic_sex)
+  df$label <- factor(df$label, levels = c("Content-irrelevant","Content-relevant"))
+  df
+}
+
+train <- clean(read_join("TaskD_Dataset/forum_ind_train.csv",
+                         "TaskD_Dataset/forum_dep_train.csv"))
+val <- clean(read_join("TaskD_Dataset/forum_ind_validation.csv",
+                         "TaskD_Dataset/forum_dep_validation.csv"))
+val$unit_faculty<- factor(val$unit_faculty, levels = levels(train$unit_faculty))
+val$demographic_sex <- factor(val$demographic_sex, levels = levels(train$demographic_sex))
+
+predictors <- setdiff(names(train), c("Unique_ID","label"))
+form <- as.formula(paste("label ~", paste(predictors, collapse = " + ")))
+
+eval_metrics <- function(actual, predicted, positive = "Content-relevant") {
+  actual <- as.character(actual); predicted <- as.character(predicted)
+  TP <- sum(predicted==positive & actual==positive) # True positive
+  FP <- sum(predicted==positive & actual!=positive) # False positive
+  FN <- sum(predicted!=positive & actual==positive) # False negative
+  TN <- sum(predicted!=positive & actual!=positive) # True negative
+  precision <- TP / (TP + FP); recall <- TP / (TP + FN)
+  f1 <- 2 * precision * recall / (precision + recall)
+  data.frame(accuracy=(TP + TN) / length(actual), precision, recall, f1)
+}
+
+fit_tree <- rpart(form, data = train, method = "class")
+pred_tree <- predict(fit_tree, val, type = "class")
+
+fit_glm <- glm(form, data = train, family = binomial)
+pred_glm <- ifelse(predict(fit_glm, val, type="response") > 0.5,
+                   "Content-relevant", "Content-irrelevant")
+
+fit_nb <- naiveBayes(form, data = train)
+pred_nb <- predict(fit_nb, val)
+
+rbind(
+  cbind(model="Decision tree",       eval_metrics(val$label, pred_tree)),
+  cbind(model="Logistic regression", eval_metrics(val$label, pred_glm)),
+  cbind(model="Naive Bayes",         eval_metrics(val$label, pred_nb))
+)
+```
+**Logistic regression** performs best on the validation set *(F1 = 0.917, accuracy = 0.881)*, ahead of the **decision tree** *(F1 = 0.902)* and **naive Bayes** *(F1 = 0.872)*. I therefore take logistic regression as Model 1. 
+**Naive Bayes** has the weakest precision, which fits its strong independence assumption being violated by the many correlated LIWC variables.
+
+> Note that fitting logistic regression on all 95 predictors triggers a "fitted probabilities numerically 0 or 1" warning, indicating quasi-separation and a risk of overfitting. This motivates the variable-selection and alternative-model experiments in Q4.
+
+```{r}
+library(rpart)
+library(ggplot2)
+# (train built with the same read_join + clean from Q2)
+
+# Method 1: decision-tree importance
+fit_tree <- rpart(form, data = train, method = "class")
+imp <- sort(fit_tree$variable.importance, decreasing = TRUE)
+head(imp, 15)
+
+d <- data.frame(variable = names(imp), importance = as.numeric(imp))[1:15, ]
+d$variable <- factor(d$variable, levels = rev(d$variable))
+ggplot(d, aes(variable, importance)) + 
+  geom_col() +
+  coord_flip() + 
+  labs(
+    title = "Decision-tree variable importance (top 15)",
+    x = NULL, y = "Importance") + 
+  theme_minimal()
+
+# Method 2: apply t-test of each LIWC variable by label
+liwc_vars <- setdiff(predictors, c("unit_faculty","demographic_sex"))
+uni <- data.frame()
+
+for (v in liwc_vars) {
+  tt <- t.test(train[[v]] ~ train$label)
+  uni <- rbind(uni, data.frame(variable = v,
+              mean_irrel = tt$estimate[1], mean_rel = tt$estimate[2],
+              t_stat = unname(tt$statistic), p_value = tt$p.value))
+}
+
+uni$p_adj <- p.adjust(uni$p_value, method = "BH")
+uni <- uni[order(abs(uni$t_stat), decreasing = TRUE), ]
+head(uni, 15)
+
+intersect(names(head(imp,15)), head(uni$variable,15))   # the robust core
+
+# Chi-square test 
+# Categorical predictors need chi-square, not a t-test
+chisq.test(table(train$demographic_sex, train$label))   # p = 0.22  -> not associated
+chisq.test(table(train$unit_faculty,   train$label))    # p < 2e-16 -> strongly associated
+prop.table(table(train$unit_faculty, train$label), 1)   # relevance rate per faculty
+```
+Two independent methods — decision-tree importance and a univariate t-test of each variable by class — agree on a core set of important variables (WC, WPS, cause, i, ppron, pronoun, affiliation). Word count is by far the strongest signal: content-relevant posts are much longer (160 vs 36 words) and more elaborated (WPS, Sixltr, Analytic). 
+
+Conversely, content-irrelevant posts use more first-person and personal pronouns and affiliation words, reflecting short social or logistical messages. In short, relevance is driven by post length and a formal-reasoning-versus-personal-chat contrast. This informs Q4, where I test whether a model built on this important subset can outperform Model 1.
+
+
 
