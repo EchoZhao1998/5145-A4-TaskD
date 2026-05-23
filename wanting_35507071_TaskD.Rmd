@@ -31,6 +31,7 @@ ind |> count(demographic_sex)
 
 
 # Set the LIWC variables = everything except ID and the 2 categoricals.
+# setDiff() can be regarded as left_join
 liwc_vars <- setdiff(names(ind), c("Unique_ID", "unit_faculty", "demographic_sex"))
 
 #  ===== SEX ======
@@ -103,6 +104,8 @@ The ind and dep files are joined on Unique_ID to form the modelling table, and a
 ```{r}
 library(rpart)
 library(e1071)
+library(MLmetrics)
+
 
 read_join <- function(ind_file, dep_file) {
   x <- read.csv(ind_file, stringsAsFactors = FALSE)
@@ -136,14 +139,14 @@ predictors <- setdiff(names(train), c("Unique_ID","label"))
 form <- as.formula(paste("label ~", paste(predictors, collapse = " + ")))
 
 eval_metrics <- function(actual, predicted, positive = "Content-relevant") {
-  actual <- as.character(actual); predicted <- as.character(predicted)
-  TP <- sum(predicted==positive & actual==positive) # True positive
-  FP <- sum(predicted==positive & actual!=positive) # False positive
-  FN <- sum(predicted!=positive & actual==positive) # False negative
-  TN <- sum(predicted!=positive & actual!=positive) # True negative
-  precision <- TP / (TP + FP); recall <- TP / (TP + FN)
-  f1 <- 2 * precision * recall / (precision + recall)
-  data.frame(accuracy=(TP + TN) / length(actual), precision, recall, f1)
+  data.frame(
+    # NOTE: Accuracy uses (y_pred, y_true); the others use (y_true, y_pred).
+    # I name the arguments so the order can't be mixed up.
+    accuracy  = Accuracy(y_pred = predicted, y_true = actual),
+    precision = Precision(y_true = actual, y_pred = predicted, positive = positive),
+    recall = Recall(y_true = actual, y_pred = predicted, positive = positive),
+    f1 = F1_Score(y_true = actual, y_pred = predicted, positive = positive)
+  )
 }
 
 fit_tree <- rpart(form, data = train, method = "class")
@@ -173,6 +176,7 @@ library(ggplot2)
 # (train built with the same read_join + clean from Q2)
 
 # Method 1: decision-tree importance
+# Because here is juding "relevant/irrelevant", utilizing "class" method for `rpart()`(desision tree) functiont to predicts a discrete category or class label.
 fit_tree <- rpart(form, data = train, method = "class")
 imp <- sort(fit_tree$variable.importance, decreasing = TRUE)
 head(imp, 15)
@@ -204,15 +208,93 @@ head(uni, 15)
 
 intersect(names(head(imp,15)), head(uni$variable,15))   # the robust core
 
-# Chi-square test 
 # Categorical predictors need chi-square, not a t-test
-chisq.test(table(train$demographic_sex, train$label))   # p = 0.22  -> not associated
-chisq.test(table(train$unit_faculty,   train$label))    # p < 2e-16 -> strongly associated
-prop.table(table(train$unit_faculty, train$label), 1)   # relevance rate per faculty
+chisq.test(table(train$demographic_sex, train$label))   
+# p = 0.22  -> not associated
+
+chisq.test(table(train$unit_faculty,   train$label))
+# p < 2e-16 -> strongly associated
+
+prop.table(table(train$demographic_sex, train$label), 1)
+# relecanxe rate of sexes
+
+prop.table(table(train$unit_faculty, train$label), 1)
+# relevance rate per faculty
 ```
+
+
 Two independent methods — decision-tree importance and a univariate t-test of each variable by class — agree on a core set of important variables (WC, WPS, cause, i, ppron, pronoun, affiliation). Word count is by far the strongest signal: content-relevant posts are much longer (160 vs 36 words) and more elaborated (WPS, Sixltr, Analytic). 
 
 Conversely, content-irrelevant posts use more first-person and personal pronouns and affiliation words, reflecting short social or logistical messages. In short, relevance is driven by post length and a formal-reasoning-versus-personal-chat contrast. This informs Q4, where I test whether a model built on this important subset can outperform Model 1.
+
+The two categorical variables were tested with chi-square, the appropriate test for categorical predictors. Sex is not associated with the label (χ² = 3.03, p = 0.22; relevance rate ≈ 64% for famele and 62.8% for male), whereas faculty is strongly associated (χ² = 141.8, p < 0.001), with content-relevant rates ranging from about 46% (Engineering, Law) to 80% (Business & Economics, Arts). 
+
+Thus the important predictors are post length and analytic-versus-personal language (numeric LIWC variables) together with the unit's faculty; the author's sex carries no predictive value.
+
+Because here is juding "relevant/irrelevant", utilizing "class" method for `rpart()`(desision tree) functiont to predicts a discrete category or class label.
+
+
+---
+
+# Question 4
+
+```{r}
+library(rpart) 
+library(e1071)
+library(class)
+library(MLmetrics)
+
+# 1. Isolate variable types
+num_vars <- setdiff(names(train), c("Unique_ID","unit_faculty","demographic_sex","label"))
+all_vars <- setdiff(names(train), c("Unique_ID","label"))
+
+# 2. Filter out the top 20 most important variables via t-test magnitude
+tt_abs    <- sapply(num_vars, function(v) abs(unname(t.test(train[[v]] ~ train$label)$statistic)))
+important <- names(sort(tt_abs, decreasing = TRUE))[1:20]
+
+# 3. Create log-transformed copies to fix right-skewed text distributions
+trainL <- train
+valL   <- val
+trainL[num_vars] <- log1p(train[num_vars])
+valL[num_vars]   <- log1p(val[num_vars])
+
+# 4. Initialize model baking contest list
+cand <- list()
+
+# ---- Model 1: Baseline Logistic Regression (Raw Data) ----
+m_base    <- suppressWarnings(glm(reformulate(all_vars, "label"), data = train, family = binomial))
+pred_base <- ifelse(predict(m_base, val, type = "response") > 0.5, "Content-relevant", "Content-irrelevant")
+cand[["logistic all (Model 1)"]] <- F1_Score(y_true = val$label, y_pred = pred_base, positive = "Content-relevant")
+
+# ---- Model 2: Improved Logistic Regression (Log-Transformed Data) ----
+m_log    <- glm(reformulate(all_vars, "label"), data = trainL, family = binomial)
+pred_log <- ifelse(predict(m_log, valL, type = "response") > 0.5, "Content-relevant", "Content-irrelevant")
+cand[["logistic log1p all (improved)"]] <- F1_Score(y_true = val$label, y_pred = pred_log, positive = "Content-relevant")
+
+# ---- Model 3: Decision Tree ----
+tree_model <- rpart(reformulate(all_vars, "label"), data = train, method = "class")
+pred_tree  <- predict(tree_model, val, type = "class")
+cand[["decision tree all"]] <- F1_Score(y_true = val$label, y_pred = pred_tree, positive = "Content-relevant")
+
+# ---- Model 4: kNN using only the 20 'important' features ----
+sc    <- scale(train[num_vars])
+va_sc <- scale(val[num_vars], center = attr(sc, "scaled:center"), scale = attr(sc, "scaled:scale"))
+pred_knn <- knn(train = sc[, important], test = va_sc[, important], cl = train$label, k = 9)
+cand[["kNN important k=9"]] <- F1_Score(y_true = val$label, y_pred = pred_knn, positive = "Content-relevant")
+
+# 5. Print out the leaderboard scoreboard
+data.frame(model = names(cand), F1 = round(unlist(cand), 4))
+
+---
+
+# 6. FINAL ANALYSIS OF THE WINNER (Logistic on Log-Transformed Data)
+# Yields the F1 validation score: 0.9227
+F1_Score(y_true = val$label, y_pred = pred_log, positive = "Content-relevant")  
+
+# Print final Confusion Matrix
+table(predicted = pred_log, actual = val$label)
+```
+
 
 
 
