@@ -19,7 +19,6 @@ knitr::opts_chunk$set(echo = TRUE, eval = TRUE, warning = FALSE, message = FALSE
 
 
 ```{r}
-library(tidyverse)
 # Load data and extract two target columns. set them as factors
 ind <- read.csv("TaskD_Dataset/forum_ind_train.csv", stringsAsFactors = F)
 ind$demographic_sex <- factor(ind$demographic_sex)
@@ -64,7 +63,7 @@ fac_df$unit_faculty <- droplevels(fac_df$unit_faculty)
 fac_results <- data.frame()
 for (v in liwc_vars) {
   fit <- aov(fac_df[[v]] ~ fac_df$unit_faculty)  # one-way ANOVA
-  p   <- summary(fit)[[1]][["P-value(>F)"]][1]  # pull the p-value out
+  p   <- summary(fit)[[1]][["Pr(>F)"]][1]  # pull the p-value out
   fac_results <- rbind(fac_results, data.frame(variable = v, p_value = p))
 }
 fac_results$p_adj <- p.adjust(fac_results$p_value, method = "BH")
@@ -249,7 +248,17 @@ num_vars <- setdiff(names(train), c("Unique_ID","unit_faculty","demographic_sex"
 all_vars <- setdiff(names(train), c("Unique_ID","label"))
 
 # 2. Filter out the top 20 most important variables via t-test magnitude
-tt_abs    <- sapply(num_vars, function(v) abs(unname(t.test(train[[v]] ~ train$label)$statistic)))
+# (1): Write a function collect t-value for each words 
+get_t_stat <- function(variable_name) {
+  test_result <- t.test(train[[variable_name]] ~ train$label)
+  absolute_t <- abs(unname(test_result$statistic))
+  return(absolute_t)
+}
+
+# (2): Feed your list of variables and your new function into sapply
+tt_abs <- sapply(num_vars, get_t_stat)
+
+# (3): Pick the top 20 just like before
 important <- names(sort(tt_abs, decreasing = TRUE))[1:20]
 
 # 3. Create log-transformed copies to fix right-skewed text distributions
@@ -261,22 +270,22 @@ valL[num_vars]   <- log1p(val[num_vars])
 # 4. Initialize model baking contest list
 cand <- list()
 
-# ---- Model 1: Baseline Logistic Regression (Raw Data) ----
+# Model 1: Baseline Logistic Regression (Raw Data)
 m_base    <- suppressWarnings(glm(reformulate(all_vars, "label"), data = train, family = binomial))
 pred_base <- ifelse(predict(m_base, val, type = "response") > 0.5, "Content-relevant", "Content-irrelevant")
 cand[["logistic all (Model 1)"]] <- F1_Score(y_true = val$label, y_pred = pred_base, positive = "Content-relevant")
 
-# ---- Model 2: Improved Logistic Regression (Log-Transformed Data) ----
+# Model 2: Improved Logistic Regression (Log-Transformed Data)
 m_log    <- glm(reformulate(all_vars, "label"), data = trainL, family = binomial)
 pred_log <- ifelse(predict(m_log, valL, type = "response") > 0.5, "Content-relevant", "Content-irrelevant")
 cand[["logistic log1p all (improved)"]] <- F1_Score(y_true = val$label, y_pred = pred_log, positive = "Content-relevant")
 
-# ---- Model 3: Decision Tree ----
+# Model 3: Decision Tree
 tree_model <- rpart(reformulate(all_vars, "label"), data = train, method = "class")
 pred_tree  <- predict(tree_model, val, type = "class")
 cand[["decision tree all"]] <- F1_Score(y_true = val$label, y_pred = pred_tree, positive = "Content-relevant")
 
-# ---- Model 4: kNN using only the 20 'important' features ----
+# Model 4: kNN using only the 20 'important' features
 sc    <- scale(train[num_vars])
 va_sc <- scale(val[num_vars], center = attr(sc, "scaled:center"), scale = attr(sc, "scaled:scale"))
 pred_knn <- knn(train = sc[, important], test = va_sc[, important], cl = train$label, k = 9)
@@ -285,7 +294,6 @@ cand[["kNN important k=9"]] <- F1_Score(y_true = val$label, y_pred = pred_knn, p
 # 5. Print out the leaderboard scoreboard
 data.frame(model = names(cand), F1 = round(unlist(cand), 4))
 
----
 
 # 6. FINAL ANALYSIS OF THE WINNER (Logistic on Log-Transformed Data)
 # Yields the F1 validation score: 0.9227
@@ -294,7 +302,50 @@ F1_Score(y_true = val$label, y_pred = pred_log, positive = "Content-relevant")
 # Print final Confusion Matrix
 table(predicted = pred_log, actual = val$label)
 ```
+To improve Model 1, I applied several of the strategies suggested in the question, each motivated by a specific weakness of the baseline. Model 1 (logistic regression on all raw variables) triggered a "fitted probabilities 0 or 1" warning, signalling quasi-separation and overfitting, so I tested: a data transformation (log1p of the LIWC variables, since they are right-skewed counts), an alternative algorithm that handles non-linear structure (a decision tree), and a rescaled distance-based model on a feature subset (kNN on the 20 most important variables, standardised because kNN is scale-sensitive).
+
+The validation F1 scores were: baseline logistic = 0.917, log-transformed logistic = 0.923, decision tree = 0.902, and kNN (k = 9) = 0.916. The log-transformed logistic regression was the best, and just as importantly it no longer produced the separation warning — log-compressing the extreme counts (e.g. very long posts in WC) yields a better-conditioned, less overfit model. The decision tree and kNN did not beat the baseline.
+
+I therefore conclude that Model 1 can be modestly but genuinely improved: log-transforming the predictors lifts validation F1 from 0.917 to 0.923 while removing the overfitting risk. This log-transformed logistic regression is the model I carry forward to predict the test set in Q5.
 
 
+---
+
+# Question 5
+
+```{r}
+# Final model = the Q4 winner: logistic regression on log-transformed variables
+num_vars <- setdiff(names(train), c("Unique_ID","unit_faculty","demographic_sex","label"))
+all_vars <- setdiff(names(train), c("Unique_ID","label"))
+
+trainL <- train
+trainL[num_vars] <- log1p(train[num_vars])
+final_model <- glm(reformulate(all_vars, "label"), data = trainL, family = binomial)
+
+# --- read the test files (do NOT drop rows: every row needs a label) ---
+ind_test <- read.csv("TaskD_Dataset/forum_ind_test.csv", stringsAsFactors = FALSE)
+dep_test <- read.csv("TaskD_Dataset/forum_dep_test.csv", stringsAsFactors = FALSE)
+
+# same categorical clean-up + identical factor levels as training
+ind_test$unit_faculty    <- ifelse(is.na(ind_test$unit_faculty), "Unknown", ind_test$unit_faculty)
+ind_test$demographic_sex <- ifelse(ind_test$demographic_sex %in% c("F","M"),
+                                   ind_test$demographic_sex, "Unknown")
+ind_test$unit_faculty    <- factor(ind_test$unit_faculty,    levels = levels(train$unit_faculty))
+ind_test$demographic_sex <- factor(ind_test$demographic_sex, levels = levels(train$demographic_sex))
+ind_test[num_vars]       <- log1p(ind_test[num_vars])          # same transform as the model
+
+# predict, then fill dep_test's label column in its ORIGINAL row order
+prob <- predict(final_model, ind_test, type = "response")
+pred <- ifelse(prob > 0.5, "Content-relevant", "Content-irrelevant")
+pred_by_id <- data.frame(Unique_ID = ind_test$Unique_ID, pred = pred)
+dep_test$label <- pred_by_id$pred[match(dep_test$Unique_ID, pred_by_id$Unique_ID)]
+
+# one test row has all-NA features -> fall back to the majority class
+dep_test$label[is.na(dep_test$label)] <- names(sort(table(train$label), decreasing = TRUE))[1]
+
+# write submission: same 2 columns, 556 rows, unquoted
+write.csv(dep_test, "Zhao_35507071_forum_label_test.csv", row.names = FALSE, quote = FALSE)
+
+```
 
 
