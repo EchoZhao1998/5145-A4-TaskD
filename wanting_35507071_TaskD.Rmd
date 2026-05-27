@@ -97,22 +97,16 @@ ggplot(sex_data, aes(demographic_sex, social, fill = demographic_sex)) +
 # Boxplot: Money words by faculty
 ggplot(faculty_data, aes(unit_faculty, money)) +
   geom_boxplot(fill = "steelblue") +
-  labs(title = "Money words by faculty", x = NULL, y = "Money word count") +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
-```
-
-ggplot(fac_df, aes(unit_faculty, money)) +
-  geom_boxplot(fill = "steelblue") +
   labs(title = "Money words by faculty", x = NULL, y = "money") +
   theme_minimal() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 ```
+
 **Sex:**
 15 of 93 variables differ significantly (adjusted p < 0.05). The biggest gaps: women's posts score higher on social (8.99 vs 7.84), family (0.19 vs 0.06), Exclam (1.39 vs 0.43), Clout, and are longer overall (WC 122 vs 106 words); men score higher on number (3.47 vs 2.53). These line up with well-documented LIWC gender patterns — more affiliative/social language from women, more numeric language from men.
 
 **Faculty:** 
-78 of 93 variables differ — faculty effects are far stronger than sex effects. The standouts are topic words: money is dominated by Business & Economics (mean 4.38 vs ~0.1–0.9 everywhere else), and health/bio/work follow the same disciplinary logic.
+78 of 93 variables differ — faculty effects are far stronger than sex effects. The standouts are topic words: money is dominated by Business & Economics (mean 4.38 vs ~0.1-0.9 everywhere else), and health/bio/work follow the same disciplinary logic.
 
 Differences between faculties are much larger and more pervasive than differences between sexes, and the strongest faculty differences are content/topic words that reflect what each discipline talks about.
 
@@ -123,9 +117,6 @@ Differences between faculties are much larger and more pervasive than difference
 # Question 2
 
 The ind and dep files are joined on Unique_ID to form the modelling table, and a single cleaning function is applied to both train and validation so they are treated identically. I evaluate three classifiers covered in the unit — a decision tree, logistic regression and naive Bayes — each trained on all independent variables. Performance is measured with accuracy, precision, recall and F1, treating Content-relevant as the positive class so that F1 is consistent with the metric used for Q4 and Q5.
-
-library(e1071)
-library(MLmetrics)
 
 ```{r data-prep-and-modeling}
 # Load required libraries
@@ -201,9 +192,12 @@ results
 
 > Note: Fitting logistic regression on all 95 predictors triggers a "fitted probabilities numerically 0 or 1" warning, indicating quasi-separation and a risk of overfitting. This motivates the variable-selection and alternative-model experiments in Q4.
 
+<br>
+---
+
+# Question 3
 
 ```{r variable-importance-and-univariate-tests}
-# Q3: Variable importance and univariate tests
 library(rpart)
 library(ggplot2)
 
@@ -224,7 +218,7 @@ ggplot(imp_df, aes(variable, importance)) +
 # Method 2: Univariate t-test for each LIWC variable by label
 liwc_vars <- setdiff(predictors, c("unit_faculty","demographic_sex"))
 
-# Split the for-loop for clarity: run t-tests, then build the data frame
+# Apply for-loop for clarity: run t-tests, then build the data frame
 t_test_results <- lapply(liwc_vars, function(v) {
   tt <- t.test(train[[v]] ~ train$label)
   data.frame(variable = v,
@@ -266,6 +260,11 @@ Because here is juding "relevant/irrelevant", utilizing "class" method for `rpar
 
 # Question 4
 
+**Methods to be used:**
+- Decision tree (`rpart`)
+- kNN
+- Logistic regression (raw and log-transformed)
+
 ```{r model-comparison-and-improvement}
 # Q4: Model comparison and improvement
 library(rpart)
@@ -274,11 +273,10 @@ library(class)
 library(MLmetrics)
 
 # 1. Isolate variable types
-num_vars <- setdiff(names(train), c("Unique_ID","unit_faculty","demographic_sex","label"))
-all_vars <- setdiff(names(train), c("Unique_ID","label"))
+num_vars <- setdiff(names(train), c("Unique_ID", "unit_faculty","demographic_sex", "label"))
+all_vars <- setdiff(names(train), c("Unique_ID", "label"))
 
 # 2. Select top 20 most important variables by t-statistic magnitude
-# Split the for-loop: compute t-stats, then select top variables
 get_t_stat <- function(variable_name) {
   test_result <- t.test(train[[variable_name]] ~ train$label)
   abs(unname(test_result$statistic))
@@ -296,25 +294,25 @@ valL[num_vars]   <- log1p(val[num_vars])
 cand <- list()
 
 # Model 1: Baseline Logistic Regression (Raw Data)
-```
-To improve Model 1, I applied several of the strategies suggested in the question, each motivated by a specific weakness of the baseline. Model 1 (logistic regression on all raw variables) triggered a "fitted probabilities 0 or 1" warning, signalling quasi-separation and overfitting, so I tested: a data transformation (log1p of the LIWC variables, since they are right-skewed counts), an alternative algorithm that handles non-linear structure (a decision tree), and a rescaled distance-based model on a feature subset (kNN on the 20 most important variables, standardised because kNN is scale-sensitive).
-
+m_base    <- suppressWarnings(glm(reformulate(all_vars, "label"), data = train, family = binomial))
+pred_base <- ifelse(predict(m_base, val, type = "response") > 0.5, "Content-relevant", "Content-irrelevant")
+cand[["logistic all (Model 1)"]] <- F1_Score(y_true = val$label, y_pred = pred_base, positive = "Content-relevant")
 
 # Model 2: Improved Logistic Regression (Log-Transformed Data)
-The validation F1 scores were: baseline logistic = 0.917, log-transformed logistic = 0.923, decision tree = 0.902, and kNN (k = 9) = 0.916. The log-transformed logistic regression was the best, and just as importantly it no longer produced the separation warning — log-compressing the extreme counts (e.g. very long posts in WC) yields a better-conditioned, less overfit model. The decision tree and kNN did not even beat the baseline.
-
-I therefore conclude that Model 1 can be modestly but genuinely improved: log-transforming the predictors lifts validation F1 from 0.917 to 0.923 while removing the overfitting risk. This log-transformed logistic regression is the model I carry forward to predict the test set in Q5.
+m_log    <- glm(reformulate(all_vars, "label"), data = trainL, family = binomial)
+pred_log <- ifelse(predict(m_log, valL, type = "response") > 0.5, "Content-relevant", "Content-irrelevant")
+cand[["logistic log1p all (improved)"]] <- F1_Score(y_true = val$label, y_pred = pred_log, positive = "Content-relevant")
 
 # Model 3: Decision Tree
 tree_model <- rpart(reformulate(all_vars, "label"), data = train, method = "class")
 pred_tree  <- predict(tree_model, val, type = "class")
-
+cand[["decision tree all"]] <- F1_Score(y_true = val$label, y_pred = pred_tree, positive = "Content-relevant")
 
 # Model 4: kNN using only the 20 'important' features
 sc <- scale(train[num_vars])
 va_sc <- scale(val[num_vars], center = attr(sc, "scaled:center"), scale = attr(sc, "scaled:scale"))
 pred_knn <- knn(train = sc[, important], test = va_sc[, important], cl = train$label, k = 9)
-
+cand[["kNN important k=9"]] <- F1_Score(y_true = val$label, y_pred = pred_knn, positive = "Content-relevant")
 
 # 5. Print out the leaderboard
 data.frame(model = names(cand), F1 = round(unlist(cand), 4))
