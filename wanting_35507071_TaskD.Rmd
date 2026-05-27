@@ -169,8 +169,8 @@ eval_metrics <- function(actual, predicted, positive = "Content-relevant") {
   data.frame(
     accuracy  = Accuracy(y_pred = predicted, y_true = actual),
     precision = Precision(y_true = actual, y_pred = predicted, positive = positive),
-    recall    = Recall(y_true = actual, y_pred = predicted, positive = positive),
-    f1        = F1_Score(y_true = actual, y_pred = predicted, positive = positive)
+    recall = Recall(y_true = actual, y_pred = predicted, positive = positive),
+    f1 = F1_Score(y_true = actual, y_pred = predicted, positive = positive)
   )
 }
 
@@ -188,9 +188,9 @@ pred_nb <- predict(fit_nb, val)
 
 # Combine results for easy comparison
 results <- rbind(
-  cbind(model="Decision tree",       eval_metrics(val$label, pred_tree)),
+  cbind(model="Decision tree", eval_metrics(val$label, pred_tree)),
   cbind(model="Logistic regression", eval_metrics(val$label, pred_glm)),
-  cbind(model="Naive Bayes",         eval_metrics(val$label, pred_nb))
+  cbind(model="Naive Bayes", eval_metrics(val$label, pred_nb))
 )
 results
 ```
@@ -265,10 +265,6 @@ Because here is juding "relevant/irrelevant", utilizing "class" method for `rpar
 ---
 
 # Question 4
-```{r}
-library(rpart) 
-library(e1071)
-library(class)
 
 ```{r model-comparison-and-improvement}
 # Q4: Model comparison and improvement
@@ -305,7 +301,7 @@ To improve Model 1, I applied several of the strategies suggested in the questio
 
 
 # Model 2: Improved Logistic Regression (Log-Transformed Data)
-The validation F1 scores were: baseline logistic = 0.917, log-transformed logistic = 0.923, decision tree = 0.902, and kNN (k = 9) = 0.916. The log-transformed logistic regression was the best, and just as importantly it no longer produced the separation warning — log-compressing the extreme counts (e.g. very long posts in WC) yields a better-conditioned, less overfit model. The decision tree and kNN did not beat the baseline.
+The validation F1 scores were: baseline logistic = 0.917, log-transformed logistic = 0.923, decision tree = 0.902, and kNN (k = 9) = 0.916. The log-transformed logistic regression was the best, and just as importantly it no longer produced the separation warning — log-compressing the extreme counts (e.g. very long posts in WC) yields a better-conditioned, less overfit model. The decision tree and kNN did not even beat the baseline.
 
 I therefore conclude that Model 1 can be modestly but genuinely improved: log-transforming the predictors lifts validation F1 from 0.917 to 0.923 while removing the overfitting risk. This log-transformed logistic regression is the model I carry forward to predict the test set in Q5.
 
@@ -315,7 +311,7 @@ pred_tree  <- predict(tree_model, val, type = "class")
 
 
 # Model 4: kNN using only the 20 'important' features
-sc    <- scale(train[num_vars])
+sc <- scale(train[num_vars])
 va_sc <- scale(val[num_vars], center = attr(sc, "scaled:center"), scale = attr(sc, "scaled:scale"))
 pred_knn <- knn(train = sc[, important], test = va_sc[, important], cl = train$label, k = 9)
 
