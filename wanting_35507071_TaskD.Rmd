@@ -139,7 +139,7 @@ clean <- function(df) {
   df <- df[!is.na(df$label), ]  # Remove rows with missing label
   df$unit_faculty <- ifelse(is.na(df$unit_faculty), "Unknown", df$unit_faculty)
   df$demographic_sex <- ifelse(df$demographic_sex %in% c("F","M"), df$demographic_sex, "Unknown")
-  df$unit_faculty    <- factor(df$unit_faculty)
+  df$unit_faculty <- factor(df$unit_faculty)
   df$demographic_sex <- factor(df$demographic_sex)
   df$label <- factor(df$label, levels = c("Content-irrelevant","Content-relevant"))
   df
@@ -147,12 +147,12 @@ clean <- function(df) {
 
 # Prepare training and validation sets
 train <- clean(read_join("TaskD_Dataset/forum_ind_train.csv", "TaskD_Dataset/forum_dep_train.csv"))
-val   <- clean(read_join("TaskD_Dataset/forum_ind_validation.csv", "TaskD_Dataset/forum_dep_validation.csv"))
-val$unit_faculty    <- factor(val$unit_faculty, levels = levels(train$unit_faculty))
+val <- clean(read_join("TaskD_Dataset/forum_ind_validation.csv", "TaskD_Dataset/forum_dep_validation.csv"))
+val$unit_faculty <- factor(val$unit_faculty, levels = levels(train$unit_faculty))
 val$demographic_sex <- factor(val$demographic_sex, levels = levels(train$demographic_sex))
 
 # Define predictors and formula
-predictors <- setdiff(names(train), c("Unique_ID","label"))
+predictors <- setdiff(names(train), c("Unique_ID", "label"))
 form <- as.formula(paste("label ~", paste(predictors, collapse = " + ")))
 
 # Helper function: evaluate model metrics
@@ -171,7 +171,7 @@ pred_tree <- predict(fit_tree, val, type = "class")
 
 # Fit and predict: Logistic Regression
 fit_glm <- glm(form, data = train, family = binomial)
-pred_glm <- ifelse(predict(fit_glm, val, type="response") > 0.5, "Content-relevant", "Content-irrelevant")
+pred_glm <- ifelse(predict(fit_glm, val, type = "response") > 0.5, "Content-relevant", "Content-irrelevant")
 
 # Fit and predict: Naive Bayes
 fit_nb <- naiveBayes(form, data = train)
@@ -179,9 +179,9 @@ pred_nb <- predict(fit_nb, val)
 
 # Combine results for easy comparison
 results <- rbind(
-  cbind(model="Decision tree", eval_metrics(val$label, pred_tree)),
-  cbind(model="Logistic regression", eval_metrics(val$label, pred_glm)),
-  cbind(model="Naive Bayes", eval_metrics(val$label, pred_nb))
+  cbind(model = "Decision tree", eval_metrics(val$label, pred_tree)),
+  cbind(model = "Logistic regression", eval_metrics(val$label, pred_glm)),
+  cbind(model = "Naive Bayes", eval_metrics(val$label, pred_nb))
 )
 results
 ```
@@ -216,7 +216,7 @@ ggplot(imp_df, aes(variable, importance)) +
   theme_minimal()
 
 # Method 2: Univariate t-test for each LIWC variable by label
-liwc_vars <- setdiff(predictors, c("unit_faculty","demographic_sex"))
+liwc_vars <- setdiff(predictors, c("unit_faculty", "demographic_sex"))
 
 # Apply for-loop for clarity: run t-tests, then build the data frame
 t_test_results <- lapply(liwc_vars, function(v) {
@@ -237,11 +237,11 @@ intersect(names(head(imp, 15)), head(uni$variable, 15))
 
 # Categorical predictors: chi-square tests
 chisq.test(table(train$demographic_sex, train$label))   # Sex vs label
-chisq.test(table(train$unit_faculty, train$label))      # Faculty vs label
+chisq.test(table(train$unit_faculty, train$label))   # Faculty vs label
 
 # Proportion tables for interpretation
 prop.table(table(train$demographic_sex, train$label), 1) # Relevance rate by sex
-prop.table(table(train$unit_faculty, train$label), 1)    # Relevance rate by faculty
+prop.table(table(train$unit_faculty, train$label), 1)  # Relevance rate by faculty
 ```
 
 
@@ -251,7 +251,7 @@ Conversely, content-irrelevant posts use more first-person and personal pronouns
 
 The two categorical variables were tested with chi-square, the appropriate test for categorical predictors. Sex is not associated with the label (χ² = 3.03, p = 0.22; relevance rate ≈ 64% for famele and 62.8% for male), whereas faculty is strongly associated (χ² = 141.8, p < 0.001), with content-relevant rates ranging from about 46% (Engineering, Law) to 80% (Business & Economics, Arts). 
 
-Thus the important predictors are post length and analytic-versus-personal language (numeric LIWC variables) together with the unit's faculty; the author's sex carries no predictive value.
+Thus the important predictors are **post length and analytic-versus-personal language (numeric LIWC variables) together with the unit's faculty**; the author's sex carries no predictive value.
 
 Because here is juding "relevant/irrelevant", utilizing "class" method for `rpart()`(desision tree) functiont to predicts a discrete category or class label.
 
@@ -261,6 +261,7 @@ Because here is juding "relevant/irrelevant", utilizing "class" method for `rpar
 # Question 4
 
 **Methods to be used:**
+
 - Decision tree (`rpart`)
 - kNN
 - Logistic regression (raw and log-transformed)
@@ -330,8 +331,8 @@ table(predicted = pred_log, actual = val$label) # Confusion matrix
 # Q5: Predict on test set and prepare submission
 
 # Final model: logistic regression on log-transformed variables
-num_vars <- setdiff(names(train), c("Unique_ID","unit_faculty","demographic_sex","label"))
-all_vars <- setdiff(names(train), c("Unique_ID","label"))
+num_vars <- setdiff(names(train), c("Unique_ID", "unit_faculty","demographic_sex","label"))
+all_vars <- setdiff(names(train), c("Unique_ID", "label"))
 
 trainL <- train
 trainL[num_vars] <- log1p(train[num_vars])
@@ -342,11 +343,11 @@ ind_test <- read.csv("TaskD_Dataset/forum_ind_test.csv", stringsAsFactors = FALS
 dep_test <- read.csv("TaskD_Dataset/forum_dep_test.csv", stringsAsFactors = FALSE)
 
 # Clean up categoricals and apply same factor levels as training
-ind_test$unit_faculty    <- ifelse(is.na(ind_test$unit_faculty), "Unknown", ind_test$unit_faculty)
+ind_test$unit_faculty <- ifelse(is.na(ind_test$unit_faculty), "Unknown", ind_test$unit_faculty)
 ind_test$demographic_sex <- ifelse(ind_test$demographic_sex %in% c("F","M"), ind_test$demographic_sex, "Unknown")
-ind_test$unit_faculty    <- factor(ind_test$unit_faculty,    levels = levels(train$unit_faculty))
+ind_test$unit_faculty <- factor(ind_test$unit_faculty,    levels = levels(train$unit_faculty))
 ind_test$demographic_sex <- factor(ind_test$demographic_sex, levels = levels(train$demographic_sex))
-ind_test[num_vars]       <- log1p(ind_test[num_vars])  # Apply same transformation
+ind_test[num_vars] <- log1p(ind_test[num_vars])  # Apply same transformation
 
 # Predict and fill dep_test's label column in its original row order
 prob <- predict(final_model, ind_test, type = "response")
